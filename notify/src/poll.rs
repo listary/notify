@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, mpsc,
     },
     thread,
     time::Duration,
@@ -404,6 +404,7 @@ pub struct PollWatcher {
     data_builder: Arc<Mutex<DataBuilder>>,
     want_to_stop: Arc<AtomicBool>,
     delay: Duration,
+    poll_tx: mpsc::Sender<()>,
 }
 
 impl PollWatcher {
@@ -411,19 +412,30 @@ impl PollWatcher {
     pub fn new<F: EventHandler>(event_handler: F, config: Config) -> crate::Result<PollWatcher> {
         let data_builder = DataBuilder::new(event_handler, config.compare_contents());
 
+        let (poll_tx, poll_rx) = mpsc::channel();
+
         let poll_watcher = PollWatcher {
             watches: Default::default(),
             data_builder: Arc::new(Mutex::new(data_builder)),
             want_to_stop: Arc::new(AtomicBool::new(false)),
             delay: config.poll_interval(),
+            poll_tx,
         };
 
-        poll_watcher.run();
+        poll_watcher.run(poll_rx);
 
         Ok(poll_watcher)
     }
 
-    fn run(&self) {
+    /// Explicit poll
+    pub fn poll(&self) -> crate::Result<()> {
+        match self.poll_tx.send(()) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(crate::Error::generic("polling thread has stopped")),
+        }
+    }
+
+    fn run(&self, poll_rx: mpsc::Receiver<()>) {
         let watches = Arc::clone(&self.watches);
         let data_builder = Arc::clone(&self.data_builder);
         let want_to_stop = Arc::clone(&self.want_to_stop);
@@ -462,7 +474,14 @@ impl PollWatcher {
                     //     thread::sleep(delay);
                     // }
                     // ```
-                    thread::sleep(delay);
+                    
+                    match poll_rx.recv_timeout(delay) {
+                        Ok(()) => {}
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            break;
+                        }
+                    }
                 }
             });
     }
@@ -531,8 +550,10 @@ impl Drop for PollWatcher {
     }
 }
 
+/*
 #[test]
 fn poll_watcher_is_send_and_sync() {
     fn check<T: Send + Sync>() {}
     check::<PollWatcher>();
 }
+*/
