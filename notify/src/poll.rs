@@ -12,7 +12,7 @@ use std::{
         Arc, Mutex, mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use data::{DataBuilder, WatchData};
@@ -404,7 +404,10 @@ pub struct PollWatcher {
     data_builder: Arc<Mutex<DataBuilder>>,
     want_to_stop: Arc<AtomicBool>,
     delay: Duration,
-    poll_tx: mpsc::Sender<()>,
+    /// Sender for sending poll signal to monitor thread.
+    pub poll_tx: mpsc::Sender<()>,
+    /// Last update time.
+    pub last_update_time: Arc<Mutex<SystemTime>>,
 }
 
 impl PollWatcher {
@@ -420,6 +423,7 @@ impl PollWatcher {
             want_to_stop: Arc::new(AtomicBool::new(false)),
             delay: config.poll_interval(),
             poll_tx,
+            last_update_time: Arc::new(Mutex::new(SystemTime::UNIX_EPOCH)),
         };
 
         poll_watcher.run(poll_rx);
@@ -438,11 +442,17 @@ impl PollWatcher {
         */
     }
 
+    /// Get last update time.
+    pub fn last_update_time(&self) -> SystemTime {
+        *self.last_update_time.lock().unwrap()
+    }
+
     fn run(&self, poll_rx: mpsc::Receiver<()>) {
         let watches = Arc::clone(&self.watches);
         let data_builder = Arc::clone(&self.data_builder);
         let want_to_stop = Arc::clone(&self.want_to_stop);
         let delay = self.delay;
+        let last_update_time = Arc::clone(&self.last_update_time);
 
         let _ = thread::Builder::new()
             .name("notify-rs poll loop".to_string())
@@ -466,6 +476,8 @@ impl PollWatcher {
                             watch_data.rescan(&mut data_builder);
                         }
                     }
+
+                    *last_update_time.lock().unwrap() = SystemTime::now();
 
                     // QUESTION: `actual_delay == process_time + delay`. Is it intended to?
                     //
