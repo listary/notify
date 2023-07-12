@@ -428,11 +428,14 @@ impl PollWatcher {
     }
 
     /// Explicit poll
-    pub fn poll(&self) -> crate::Result<()> {
+    pub fn poll_sender(&self) -> mpsc::Sender<()> {
+        self.poll_tx.clone()
+        /*
         match self.poll_tx.send(()) {
             Ok(_) => Ok(()),
             Err(_) => Err(crate::Error::generic("polling thread has stopped")),
         }
+        */
     }
 
     fn run(&self, poll_rx: mpsc::Receiver<()>) {
